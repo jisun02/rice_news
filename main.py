@@ -18,9 +18,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # 설정
 # ---------------------------
 RSS_LIST = [
-    "http://www.newsfarm.co.kr/rss/allArticle.xml"
-    # "http://www.farminsight.net/rss/allArticle.xml"
-    # "https://news.google.com/rss/search?q=쌀+when:7d&hl=ko&gl=KR&ceid=KR:ko"
+    "http://www.newsfarm.co.kr/rss/allArticle.xml",
+    "http://www.farminsight.net/rss/allArticle.xml"
+    "https://news.google.com/rss/search?q=쌀+when:7d&hl=ko&gl=KR&ceid=KR:ko"
     # "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko"
     # "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
 ]
