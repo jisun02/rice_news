@@ -139,7 +139,7 @@ def remove_existing(articles, existing_titles):
 
 
 # ---------------------------
-# Embedding 중복 제거
+# Embedding 중복 제거 --  이용 X
 # ---------------------------
 def remove_duplicates_embedding(articles):
     before = len(articles)
@@ -273,7 +273,7 @@ def process_news():
     # existing_titles = load_existing()
     # articles = remove_existing(articles, existing_titles)
 
-    articles = remove_duplicates_embedding(articles)
+    # articles = remove_duplicates_embedding(articles)
     final_articles = ai_filter(articles)
 
     # 저장
