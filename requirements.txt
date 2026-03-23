@@ -1,14 +1,5 @@
-<<<<<<< HEAD
 fastapi
-uvicorn
 feedparser
 openai
 numpy
-=======
-fastapi
-uvicorn
-feedparser
-openai
-numpy
->>>>>>> ed4e881c1f950b7ae11e93161df25b0771acafbd
 scikit-learn
