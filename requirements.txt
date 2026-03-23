@@ -1,6 +1,7 @@
 fastapi
-feedparser
-openai
 uvicorn
-numpy
+openai
+feedparser
+requests
 scikit-learn
+numpy
