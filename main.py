@@ -1,5 +1,6 @@
 import feedparser
 import os
+import re
 from datetime import datetime, timedelta
 from fastapi import FastAPI
 from openai import OpenAI
@@ -26,8 +27,18 @@ RSS_LIST = [
 ]
 
 KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가"]
+BANNED_WORDS = ["vietnam", "기부"] # 대소문자 구분 없이 필터링하기 위해 소문자로 작성
 
 STORAGE_FILE = "sent_news.json"
+
+# ---------------------------
+# 유틸리티
+# ---------------------------
+def clean_title(title):
+    """임베딩 정확도를 높이기 위해 언론사명, 특수문자 등을 제거합니다."""
+    title = re.sub(r"\[.*?\]|\(.*?\)", "", title)
+    title = re.sub(r"[^\w\s]", " ", title)
+    return " ".join(title.split())
 
 # ---------------------------
 # 기존 기사 로드/저장
@@ -95,6 +106,25 @@ def filter_date(articles):
 
     return result
 
+def filter_banned(articles):
+    """Vietnam, 베트남 등 명시적 금지어가 포함된 기사 1차 제외"""
+    before = len(articles)
+    result = []
+    removed = []
+
+    for a in articles:
+        text_to_check = (a["title"] + " " + a["url"]).lower()
+        if any(b in text_to_check for b in BANNED_WORDS):
+            removed.append(a["title"])
+        else:
+            result.append(a)
+
+    print(f"\n🚫 [BANNED WORDS FILTER]")
+    print(f"입력: {before} → 출력: {len(result)}")
+    print(f"제거됨 ({len(removed)}개):")
+    for r in removed[:5]: # 너무 많을 수 있으니 5개만 출력
+        print(" -", r)
+    return result
 
 def filter_keywords(articles):
     before = len(articles)
@@ -115,7 +145,6 @@ def filter_keywords(articles):
         print(" -", r)
 
     return result
-
 
 def remove_existing(articles, existing_titles):
     before = len(articles)
@@ -168,7 +197,7 @@ def remove_duplicates_embedding(articles):
 
         for j in range(i+1, len(vectors)):
             sim = cosine_similarity([vectors[i]], [vectors[j]])[0][0]
-            if sim > 0.8:
+            if sim > 0.77:
                 used.add(j)
                 removed.append(articles[j]["title"])
 
@@ -204,26 +233,25 @@ def ai_filter(articles):
         messages=[
             {
                 "role": "system",
-                "content": """You are a precise rice news filter.
+                "content": """You are an expert Rcie news editor.
+Your task is to FILTER irrelevant news AND GROUP similar news articles, picking ONLY ONE representative article per topic.
 
-Return ONLY JSON array.
+[Selection Rules - INCLUDE]
+1. TRQ (Tariff-Rate Quota): Include ALL news mentioning TRQ, even if it's about other crops like soybeans (콩) or wheat.
+2. Agricultural material prices, agricultural budget/subsidies, and general grain/crop market trends.
+3. Processed rice products, new rice varieties, export/market expansion, and rice consumption trends.
+4. Production, stockpile, price stabilization, and government rice policy.
+5. Rice varieties, cultivation, climate impact on rice
+6. Rice industry, distribution, exports, market expansion
 
-INCLUDE if article is related to:
-- Rice production, consumption, supply/demand
-- Rice price, stockpile, government policy
-- Rice import/export, trade (TRQ 포함)
-- Rice varieties, cultivation, climate impact on rice
-- Rice industry, distribution, exports, market expansion
+[Selection Rules - EXCLUDE]
+1. General agriculture policy not specific to rice
+2. Farmer welfare, education, events
+3. Government meetings or plans without rice relevance
+4. Non-food use of rice (cosmetics, beauty, etc.)
 
-EXCLUDE if:
-- General agriculture policy not specific to rice
-- Farmer welfare, education, events
-- Government meetings or plans without rice relevance
-- Non-food use of rice (cosmetics, beauty, etc.)
-
-IMPORTANT:
-- If "rice" is clearly mentioned and topic is meaningful → KEEP
-- Be inclusive rather than overly strict
+[Grouping Rules]
+If multiple articles cover the exact same event, select the ONE with the most informative title and completely DISCARD the rest.
 
 Output JSON only."""
             },
@@ -268,6 +296,7 @@ def process_news():
 
     articles = fetch_rss()
     articles = filter_date(articles)
+    articles = filter_banned(articles)
     articles = filter_keywords(articles)
 
     # existing_titles = load_existing()
