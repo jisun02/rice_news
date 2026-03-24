@@ -20,9 +20,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 RSS_LIST = [
     "http://www.newsfarm.co.kr/rss/allArticle.xml",
     "http://www.farminsight.net/rss/allArticle.xml",
-    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko"
+    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko",
     # "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko"
-    # "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
+    "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
 ]
 
 KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가"]
@@ -139,7 +139,7 @@ def remove_existing(articles, existing_titles):
 
 
 # ---------------------------
-# Embedding 중복 제거 --  이용 X
+# Embedding 중복 제거
 # ---------------------------
 def remove_duplicates_embedding(articles):
     before = len(articles)
@@ -168,7 +168,7 @@ def remove_duplicates_embedding(articles):
 
         for j in range(i+1, len(vectors)):
             sim = cosine_similarity([vectors[i]], [vectors[j]])[0][0]
-            if sim > 0.85:
+            if sim > 0.8:
                 used.add(j)
                 removed.append(articles[j]["title"])
 
@@ -273,7 +273,7 @@ def process_news():
     # existing_titles = load_existing()
     # articles = remove_existing(articles, existing_titles)
 
-    # articles = remove_duplicates_embedding(articles)
+    articles = remove_duplicates_embedding(articles)
     final_articles = ai_filter(articles)
 
     # 저장
