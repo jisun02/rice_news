@@ -12,6 +12,22 @@ import requests
 # import urllib3
 # urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+import logging
+from datetime import datetime
+
+# 로그 파일 이름 (날짜별로 생성)
+os.makedirs("logs", exist_ok=True)
+log_filename = f"logs/news_log_{datetime.now().strftime('%Y-%m-%d')}.log"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler(log_filename, encoding="utf-8"),
+        logging.StreamHandler()  # 콘솔에도 같이 출력
+    ]
+)
+
 app = FastAPI()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -25,6 +41,12 @@ RSS_LIST = [
     # "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko"
     "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
 ]
+
+# 여기에 없는 RSS는 자동으로 default(7일) 적용
+SOURCE_DAY_RULE = {
+    "http://www.newsfarm.co.kr/rss/allArticle.xml": 1,
+    "http://www.farminsight.net/rss/allArticle.xml": 1
+}
 
 KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가"]
 BANNED_WORDS = ["vietnam", "기부"] # 대소문자 구분 없이 필터링하기 위해 소문자로 작성
@@ -68,14 +90,15 @@ def fetch_rss():
 
         feed = feedparser.parse(res.content)
 
-        print("entries:", len(feed.entries))
+        logging.info("entries:", len(feed.entries))
 
         for entry in feed.entries:
             articles.append({
                 "title": entry.title,
                 "summary": entry.get("summary", ""),
                 "url": entry.link,
-                "published": entry.get("published_parsed", None)
+                "published": entry.get("published_parsed", None),
+                "source": url
             })
 
     return articles
@@ -93,16 +116,21 @@ def filter_date(articles):
     for a in articles:
         if a["published"]:
             pub = datetime(*a["published"][:6])
-            if now - pub <= timedelta(days=7):
+
+            # ✅ source별 필터 기간 설정 (딕셔너리에 없으면 7일)
+            days = SOURCE_DAY_RULE.get(a["source"], 7)
+            limit = timedelta(days=days)
+
+            if now - pub <= limit:
                 result.append(a)
             else:
                 removed.append(a["title"])
         else:
             removed.append(a["title"])
 
-    print(f"\n📅 [DATE FILTER]")
-    print(f"입력: {before} → 출력: {len(result)}")
-    print(f"제거됨 ({len(removed)}개):")
+    logging.info(f"\n📅 [DATE FILTER]")
+    logging.info(f"입력: {before} → 출력: {len(result)}")
+    logging.info(f"제거됨 ({len(removed)}개):")
 
     return result
 
@@ -119,11 +147,11 @@ def filter_banned(articles):
         else:
             result.append(a)
 
-    print(f"\n🚫 [BANNED WORDS FILTER]")
-    print(f"입력: {before} → 출력: {len(result)}")
-    print(f"제거됨 ({len(removed)}개):")
+    logging.info(f"\n🚫 [BANNED WORDS FILTER]")
+    logging.info(f"입력: {before} → 출력: {len(result)}")
+    logging.info(f"제거됨 ({len(removed)}개):")
     for r in removed[:5]: # 너무 많을 수 있으니 5개만 출력
-        print(" -", r)
+        logging.info(" -", r)
     return result
 
 def filter_keywords(articles):
@@ -138,11 +166,11 @@ def filter_keywords(articles):
         else:
             removed.append(a["title"])
 
-    print(f"\n🔍 [KEYWORD FILTER]")
-    print(f"입력: {before} → 출력: {len(result)}")
-    print(f"제거됨 ({len(removed)}개):")
+    logging.info(f"\n🔍 [KEYWORD FILTER]")
+    logging.info(f"입력: {before} → 출력: {len(result)}")
+    logging.info(f"제거됨 ({len(removed)}개):")
     for r in removed:
-        print(" -", r)
+        logging.info(" -", r)
 
     return result
 
@@ -158,11 +186,11 @@ def remove_existing(articles, existing_titles):
         else:
             removed.append(a["title"])
 
-    print(f"\n🧾 [EXISTING FILTER]")
-    print(f"입력: {before} → 출력: {len(result)}")
-    print(f"중복 제거 ({len(removed)}개):")
+    logging.info(f"\n🧾 [EXISTING FILTER]")
+    logging.info(f"입력: {before} → 출력: {len(result)}")
+    logging.info(f"중복 제거 ({len(removed)}개):")
     for r in removed:
-        print(" -", r)
+        logging.info(" -", r)
 
     return result
 
@@ -201,11 +229,11 @@ def remove_duplicates_embedding(articles):
                 used.add(j)
                 removed.append(articles[j]["title"])
 
-    print(f"\n🧠 [EMBEDDING DEDUP]")
-    print(f"입력: {before} → 출력: {len(unique_articles)}")
-    print(f"중복 제거 ({len(removed)}개):")
+    logging.info(f"\n🧠 [EMBEDDING DEDUP]")
+    logging.info(f"입력: {before} → 출력: {len(unique_articles)}")
+    logging.info(f"중복 제거 ({len(removed)}개):")
     for r in removed:
-        print(" -", r)
+        logging.info(" -", r)
 
     return unique_articles
 
@@ -271,7 +299,7 @@ Output JSON only."""
     try:
         result = json.loads(content)
     except:
-        print("❌ JSON 파싱 실패:", content)
+        logging.info("❌ JSON 파싱 실패:", content)
         return []
 
     after = len(result)
@@ -280,11 +308,11 @@ Output JSON only."""
     kept_titles = set([a["title"] for a in result])
     removed = [a["title"] for a in articles if a["title"] not in kept_titles]
 
-    print(f"\n🤖 [GPT FILTER]")
-    print(f"입력: {before} → 출력: {after}")
-    print(f"제거됨 ({len(removed)}개):")
+    logging.info(f"\n🤖 [GPT FILTER]")
+    logging.info(f"입력: {before} → 출력: {after}")
+    logging.info(f"제거됨 ({len(removed)}개):")
     for r in removed:
-        print(" -", r)
+        logging.info(" -", r)
 
     return result
 
