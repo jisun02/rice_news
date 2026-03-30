@@ -37,9 +37,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 RSS_LIST = [
     "http://www.newsfarm.co.kr/rss/allArticle.xml",
     "http://www.farminsight.net/rss/allArticle.xml",
-    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko"
-    # "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko",
-    # "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
+    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko",
+    "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
 ]
 
 # 여기에 없는 RSS는 자동으로 default(7일) 적용
@@ -49,7 +49,7 @@ SOURCE_DAY_RULE = {
 }
 
 KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가", "농산물"]
-BANNED_WORDS = ["vietnam", "기부"] # 대소문자 구분 없이 필터링하기 위해 소문자로 작성
+BANNED_WORDS = ["vietnam", "기부", "나눔"] # 대소문자 구분 없이 필터링하기 위해 소문자로 작성
 
 STORAGE_FILE = "sent_news.json"
 
@@ -277,9 +277,9 @@ Your task is to FILTER irrelevant news AND GROUP similar news articles, picking 
 
 [Selection Rules - INCLUDE]
 1. TRQ (Tariff-Rate Quota): Include ALL news mentioning TRQ, even if it's about other crops like soybeans (콩) or wheat.
-2. Agricultural material prices, agricultural budget/subsidies, and general grain/crop market trends.
+2. Agricultural material prices, agricultural budget/subsidies, rice production cost, farm profitability, and general grain/crop market trends.
 3. Processed rice products, new rice varieties, export/market expansion, and rice consumption trends.
-4. Production, stockpile, price stabilization, and government rice policy.
+4. Production, stockpile, rice market prices, price stabilization, and government rice policy.
 5. Rice varieties, cultivation, climate impact on rice
 6. Rice industry, distribution, exports, market expansion
 
