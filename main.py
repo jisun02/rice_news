@@ -37,9 +37,9 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 RSS_LIST = [
     "http://www.newsfarm.co.kr/rss/allArticle.xml",
     "http://www.farminsight.net/rss/allArticle.xml",
-    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
+    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko"
+    # "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko",
+    # "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
 ]
 
 # 여기에 없는 RSS는 자동으로 default(7일) 적용
@@ -90,7 +90,8 @@ def fetch_rss():
 
         feed = feedparser.parse(res.content)
 
-        logging.info("entries:", len(feed.entries))
+        # 오류 수정: f-string 사용
+        logging.info(f"entries: {len(feed.entries)}")
 
         for entry in feed.entries:
             articles.append({
@@ -151,7 +152,8 @@ def filter_banned(articles):
     logging.info(f"입력: {before} → 출력: {len(result)}")
     logging.info(f"제거됨 ({len(removed)}개):")
     for r in removed[:5]: # 너무 많을 수 있으니 5개만 출력
-        logging.info(" -", r)
+        # 오류 수정: f-string 사용
+        logging.info(f" - {r}")
     return result
 
 def filter_keywords(articles):
@@ -170,7 +172,8 @@ def filter_keywords(articles):
     logging.info(f"입력: {before} → 출력: {len(result)}")
     logging.info(f"제거됨 ({len(removed)}개):")
     for r in removed:
-        logging.info(" -", r)
+        # 오류 수정: f-string 사용
+        logging.info(f" - {r}")
 
     return result
 
@@ -190,7 +193,8 @@ def remove_existing(articles, existing_titles):
     logging.info(f"입력: {before} → 출력: {len(result)}")
     logging.info(f"중복 제거 ({len(removed)}개):")
     for r in removed:
-        logging.info(" -", r)
+        # 오류 수정: f-string 사용
+        logging.info(f" - {r}")
 
     return result
 
@@ -206,10 +210,15 @@ def remove_duplicates_embedding(articles):
 
     titles = [a["title"] for a in articles]
 
-    embeddings = client.embeddings.create(
-        model="text-embedding-3-small",
-        input=titles
-    ).data
+    # [수정된 부분] API 호출을 방어막(try-except)으로 감쌉니다.
+    try:
+        embeddings = client.embeddings.create(
+            model="text-embedding-3-small",
+            input=titles
+        ).data
+    except Exception as e:
+        logging.error(f"❌ OpenAI Embedding API 호출 에러 (원본 그대로 반환): {e}")
+        return articles # 에러가 나면 중복 제거를 건너뛰고 그대로 반환합니다.
 
     vectors = [e.embedding for e in embeddings]
 
@@ -233,7 +242,7 @@ def remove_duplicates_embedding(articles):
     logging.info(f"입력: {before} → 출력: {len(unique_articles)}")
     logging.info(f"중복 제거 ({len(removed)}개):")
     for r in removed:
-        logging.info(" -", r)
+        logging.info(f" - {r}")
 
     return unique_articles
 
@@ -255,13 +264,15 @@ def ai_filter(articles):
         for a in articles
     ]
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": """You are an expert Rcie news editor.
+# [수정된 부분] OpenAI API 호출 자체를 try-except로 감쌉니다.
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            temperature=0,
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are an expert Rice news editor.
 Your task is to FILTER irrelevant news AND GROUP similar news articles, picking ONLY ONE representative article per topic.
 
 [Selection Rules - INCLUDE]
@@ -281,16 +292,20 @@ Your task is to FILTER irrelevant news AND GROUP similar news articles, picking 
 [Grouping Rules]
 If multiple articles cover the exact same event, select the ONE with the most informative title and completely DISCARD the rest.
 
-Output JSON only."""
-            },
-            {
-                "role": "user",
-                "content": json.dumps(compact_articles, ensure_ascii=False)
-            }
-        ]
-    )
+Output a JSON ARRAY ONLY. Example format: [{"title": "...", "url": "..."}, ...]"""
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(compact_articles, ensure_ascii=False)
+                }
+            ]
+        )
+        content = response.choices[0].message.content
 
-    content = response.choices[0].message.content
+    except Exception as e:
+        # API 통신 에러, 키 오류, 타임아웃 등 발생 시 뻗지 않고 여기서 중단
+        logging.error(f"❌ OpenAI API 호출 에러 (재시도 안 함): {e}")
+        return []
 
     if content.startswith("```"):
         content = content.split("```")[1]
@@ -298,21 +313,32 @@ Output JSON only."""
 
     try:
         result = json.loads(content)
-    except:
-        logging.info("❌ JSON 파싱 실패:", content)
+        
+        if isinstance(result, dict):
+            for k, v in result.items():
+                if isinstance(v, list):
+                    result = v
+                    break
+            else:
+                result = [result] 
+                
+        if not isinstance(result, list):
+            result = []
+
+    except Exception as e:
+        logging.info(f"❌ JSON 파싱 실패 ({e}): {content}")
         return []
 
     after = len(result)
 
-    # GPT에서 살아남은 제목
-    kept_titles = set([a["title"] for a in result])
+    kept_titles = set([a.get("title") for a in result if isinstance(a, dict) and "title" in a])
     removed = [a["title"] for a in articles if a["title"] not in kept_titles]
 
     logging.info(f"\n🤖 [GPT FILTER]")
     logging.info(f"입력: {before} → 출력: {after}")
     logging.info(f"제거됨 ({len(removed)}개):")
     for r in removed:
-        logging.info(" -", r)
+        logging.info(f" - {r}")
 
     return result
 
