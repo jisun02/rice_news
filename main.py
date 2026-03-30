@@ -8,9 +8,9 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 import json
 import requests
+import urllib3
 
-# import urllib3
-# urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 import logging
 from datetime import datetime
@@ -48,7 +48,7 @@ SOURCE_DAY_RULE = {
     "http://www.farminsight.net/rss/allArticle.xml": 1
 }
 
-KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가"]
+KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가", "농산물"]
 BANNED_WORDS = ["vietnam", "기부"] # 대소문자 구분 없이 필터링하기 위해 소문자로 작성
 
 STORAGE_FILE = "sent_news.json"
@@ -330,7 +330,7 @@ def process_news():
     # existing_titles = load_existing()
     # articles = remove_existing(articles, existing_titles)
 
-    articles = remove_duplicates_embedding(articles)
+    # articles = remove_duplicates_embedding(articles)
     final_articles = ai_filter(articles)
 
     # 저장
