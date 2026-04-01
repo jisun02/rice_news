@@ -181,7 +181,7 @@ Example format: [{"title": "...", "url": "..."}, {"title": "...", "url": "..."}]
         content = content.split("```")[1].replace("json", "").strip()
 
     try:
-        result = json.loads(content)
+        result = json.loads(content, strict=False)
         
         # 만약 GPT가 지시를 무시하고 2단 구조(카테고리/articles)로 보낼 경우를 대비한 강제 평탄화 로직
         flattened_result = []
