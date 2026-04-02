@@ -53,24 +53,20 @@ RSS_LIST = [
 ]
 
 # 새로 추가된 네이버 API용 고도화 키워드
-NAVER_KEYWORDS = [
-    "쌀 수매", 
-    "쌀 수출",
-    "쌀 생산",
-    "쌀값", 
-    "쌀 작황",
-    "구곡"
-    "양곡관리", 
-    "미곡처리장", 
-    "TRQ"
-]
+NAVER_KEYWORDS = ["쌀", "벼", "쌀 수매", "쌀 수출", "쌀 생산", "쌀값", "쌀 작황", "구곡"
+    "양곡관리", "미곡처리장", "TRQ", "도매 쌀값", "쌀 재고", "벼 재배",
+    "농식품부 인사", "농촌진흥청 인사", "농촌경제연구원 인사", "한국농수산식품유통공사 인사",
+    "농식품부 장관 인터뷰", "쌀 정책 인터뷰", "식량 정책 인터뷰", "aT 쌀"]
 
 SOURCE_DAY_RULE = {
     "http://www.newsfarm.co.kr/rss/allArticle.xml": 1,
     "http://www.farminsight.net/rss/allArticle.xml": 1
 }
 
-KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가", "농산물"]
+KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부",
+            "비축", "TRQ", "수급", "식량", "물가", "농산물", "GMO",
+            "인사", "인터뷰", "취임", "발탁", "전보", "농식품부", "농림축산식품부",
+            "농진청", "농촌진흥청", "농경연", "농촌경제연구원", "한국농어촌공사", "농어촌공사"]
 BANNED_WORDS = ["vietnam", "기부", "나눔"]
 
 # ---------------------------
@@ -238,7 +234,7 @@ def ai_filter(articles):
             messages=[
                 {
                     "role": "system", 
-                    "content": """You are an expert Rice news editor.
+                    "content": """You are an expert Rice Trade & Market Intelligence Analyst.
 Your task is to FILTER irrelevant news and REMOVE redundant duplicates, while KEEPING AS MANY diverse articles as possible.
 
 [Deduplication Rules]
@@ -253,6 +249,7 @@ Your task is to FILTER irrelevant news and REMOVE redundant duplicates, while KE
 4. Production, stockpile, rice market prices (쌀값), price stabilization, and government rice policy.
 5. Rice varieties, cultivation, climate impact on rice
 6. Rice industry, distribution, exports, market expansion
+7. Personnel changes (인사이동, 발령, 취임 등), organizational updates, and interviews of key figures in rice-related government bodies and institutions (e.g., MAFRA, RDA, KREI).
 
 [Selection Rules - EXCLUDE]
 1. General agriculture policy not specific to rice
@@ -328,14 +325,14 @@ def process_news():
         rss_articles = fetch_rss()
         naver_articles = fetch_naver_news()
         articles = rss_articles + naver_articles
+        initial_count = len(articles)
         
         # 2. 1차 필터링
         articles = filter_date(articles)
         articles = filter_banned(articles)
         articles = filter_keywords(articles)
         
-        mid_count = len(articles)
-        logging.info(f"1차 필터 통과: {mid_count}건")
+        logging.info(f"1차 필터 통과: {initial_count}건")
 
         # 3. AI 필터링
         final_articles = ai_filter(articles)
