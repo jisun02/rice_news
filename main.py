@@ -1,19 +1,23 @@
 import feedparser
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from openai import OpenAI
 import json
 import requests
 import urllib3
 import logging
+import time
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+KST = timezone(timedelta(hours=9))
 
 # 로그 설정
 os.makedirs("logs", exist_ok=True)
 log_filename = f"logs/news_log_{datetime.now().strftime('%Y-%m-%d')}.log"
+logging.Formatter.converter = lambda *args: datetime.now(KST).timetuple()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,7 +48,7 @@ SOURCE_DAY_RULE = {
 }
 
 KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가", "농산물"]
-BANNED_WORDS = ["vietnam", "기부"]
+BANNED_WORDS = ["vietnam", "기부", "나눔"]
 
 # ---------------------------
 # Teams 알림 유틸리티
@@ -137,17 +141,34 @@ def ai_filter(articles):
         return []
 
     before = len(articles)
-    compact_articles = [{"title": a["title"], "url": a["url"]} for a in articles]
+
+    # 정규식(re)을 사용해 맨 뒤 언론사 꼬리표와 앞의 [속보] 등을 깔끔하게 제거합니다.
+    compact_articles = []
+    for a in articles:
+        clean_title = a["title"]
+        # 1. 괄호 안의 단어 제거 (예: [속보], (종합))
+        clean_title = re.sub(r'\[.*?\]|\(.*?\)', '', clean_title)
+        # 2. 맨 뒤에 붙은 하이픈(-), 파이프(|), 꺾쇠(>) 뒤의 언론사명 제거
+        # 뒤에서부터 찾아서 지우기 때문에 제목 본문의 하이픈은 비교적 안전합니다.
+        clean_title = re.sub(r'\s*[-|>|ⓒ]\s*[^-|>|ⓒ]*$', '', clean_title).strip()
+        
+        compact_articles.append({"title": clean_title, "url": a["url"]})
 
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             temperature=0,
+            max_tokens=8000,
             messages=[
                 {
                     "role": "system", 
                     "content": """You are an expert Rice news editor.
 Your task is to FILTER irrelevant news and REMOVE redundant duplicates, while KEEPING AS MANY diverse articles as possible.
+
+[Deduplication Rules]
+- Be inclusive: Keep multiple articles on the same topic if they offer different perspectives or angles.
+- MERGE AND REMOVE DUPLICATES IF they report the exact same specific local event or press release (e.g., "A specific city exports rice to Australia" or "A specific brand launches a new product"). 
+- Even if the headlines use slightly different words, if the core factual event is identical, pick ONLY ONE representative article and DISCARD the rest.
 
 [Selection Rules - INCLUDE]
 1. TRQ (Tariff-Rate Quota): Include ALL news mentioning TRQ, even if it's about other crops like soybeans (콩) or wheat.
@@ -223,7 +244,7 @@ Example format: [{"title": "...", "url": "..."}, {"title": "...", "url": "..."}]
 # ---------------------------
 @app.get("/news")
 def process_news():
-    start_time = datetime.now().strftime('%H:%M:%S')
+    start_time = datetime.now(KST).strftime('%H:%M:%S')
     send_teams_log(f"🔄 뉴스 수집 프로세스 시작 ({start_time})")
 
     try:
