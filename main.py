@@ -1,6 +1,16 @@
+# 제목과 링크만 제공하는 것은 '단순 링크' 또는 '딥 링크'에 해당하여
+# 저작권 침해로 보지 않는다는 것이 대법원의 판례이다.
+# 팀원들이 제목을 보고 관심 있는 기사의 링크를 클릭하면
+# 해당 언론사 홈페이지로 이동해서 트래픽을 발생시켜 주기 때문에 언론사 입장에서도 문제 삼지 않는다고 한다.
+# 따라서 직접 스크래퍼나 봇을 개발하실 때는 반드시
+# "본문은 가져오지 않고, 제목과 링크 위주로만 Teams에 쏴준다"는 원칙만 지키면
+# 회사에서 안전하게 사용하실 수 있다고 한다.
+
 import feedparser
 import os
 import re
+import html
+from email.utils import parsedate
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI
 from openai import OpenAI
@@ -36,15 +46,28 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # ---------------------------
 RSS_LIST = [
     "http://www.newsfarm.co.kr/rss/allArticle.xml",
-    "http://www.farminsight.net/rss/allArticle.xml",
-    "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko",
-    "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
+    "http://www.farminsight.net/rss/allArticle.xml"
+    # "https://news.google.com/rss/search?q=쌀+when:1d&hl=ko&gl=KR&ceid=KR:ko",
+    # "https://news.google.com/rss/search?q=양곡+when:7d&hl=ko&gl=KR&ceid=KR:ko",
+    # "https://news.google.com/rss/search?q=TRQ+when:7d&hl=ko&gl=KR&ceid=KR:ko"
+]
+
+# 새로 추가된 네이버 API용 고도화 키워드
+NAVER_KEYWORDS = [
+    "쌀 수매", 
+    "쌀 수출",
+    "쌀 생산",
+    "쌀값", 
+    "쌀 작황",
+    "구곡"
+    "양곡관리", 
+    "미곡처리장", 
+    "TRQ"
 ]
 
 SOURCE_DAY_RULE = {
-    "http://www.newsfarm.co.kr/rss/allArticle.xml": 2,
-    "http://www.farminsight.net/rss/allArticle.xml": 2
+    "http://www.newsfarm.co.kr/rss/allArticle.xml": 1,
+    "http://www.farminsight.net/rss/allArticle.xml": 1
 }
 
 KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부", "비축", "TRQ", "수급", "식량", "물가", "농산물"]
@@ -57,20 +80,18 @@ def send_teams_log(message):
     """Teams 웹훅으로 로그 메시지를 전송합니다."""
     webhook_url = os.getenv("TEAMS_WEBHOOK_URL")
     
-    # 1. 환경변수가 아예 설정되지 않은 경우 확실하게 로그에 띄움
     if not webhook_url:
         logging.warning("⚠️ TEAMS_WEBHOOK_URL 환경변수가 없어 Teams 알림을 생략합니다. (Render 설정을 확인하세요)")
         return 
 
     try:
         res = requests.post(webhook_url, json={"message": message}, timeout=10)
-        # 2. 전송은 했는데 Power Automate가 거절한 경우 에러 띄움
         res.raise_for_status() 
     except Exception as e:
         logging.error(f"❌ Teams 알림 전송 실패: {e}")
 
 # ---------------------------
-# RSS 수집 및 필터 함수들
+# 수집 및 필터 함수들
 # ---------------------------
 def fetch_rss():
     articles = []
@@ -83,7 +104,6 @@ def fetch_rss():
             for entry in feed.entries:
                 articles.append({
                     "title": entry.title,
-                    "summary": entry.get("summary", ""),
                     "url": entry.link,
                     "published": entry.get("published_parsed", None),
                     "source": url
@@ -92,8 +112,65 @@ def fetch_rss():
             logging.error(f"RSS 수집 에러 ({url}): {e}")
     return articles
 
+def fetch_naver_news():
+    """네이버 검색 API를 활용해 뉴스를 수집합니다."""
+    client_id = os.getenv("NAVER_CLIENT_ID")
+    client_secret = os.getenv("NAVER_CLIENT_SECRET")
+    
+    if not client_id or not client_secret:
+        logging.warning("⚠️ 네이버 API 키(NAVER_CLIENT_ID, NAVER_CLIENT_SECRET)가 설정되지 않아 네이버 검색을 건너뜁니다.")
+        return []
+
+    articles = []
+    url = "https://openapi.naver.com/v1/search/news.json"
+    headers = {
+        "X-Naver-Client-Id": client_id,
+        "X-Naver-Client-Secret": client_secret
+    }
+
+    for keyword in NAVER_KEYWORDS:
+        params = {
+            "query": keyword,
+            "display": 10,  # 서비스용: 키워드당 20개 추출
+            "sort": "date"
+        }
+        
+        try:
+            # verify=False 를 추가해서 사내망 SSL 에러 무시
+            res = requests.get(url, headers=headers, params=params, verify=False, timeout=10)
+            
+            if res.status_code != 200:
+                logging.error(f"❌ 네이버 API 요청 실패 ({keyword}): 상태 코드 {res.status_code} - {res.text}")
+                continue
+                
+            data = res.json()
+            items = data.get("items", [])
+            logging.info(f"네이버 API 수집 ({keyword}): {len(items)}건")
+            
+            for item in items:
+                # 1. HTML 태그 제거 (<b>쌀</b> -> 쌀)
+                clean_title = html.unescape(re.sub(r'<[^>]+>', '', item["title"]))
+                
+                # 2. 날짜 포맷 변환 (RSS 형태와 맞춤)
+                published_tuple = parsedate(item["pubDate"]) if item.get("pubDate") else None
+                
+                # 3. 원문 링크 우선순위 적용
+                article_url = item.get("originallink") or item.get("link")
+
+                articles.append({
+                    "title": clean_title,
+                    "url": article_url,
+                    "published": published_tuple,
+                    "source": f"Naver API ({keyword})"
+                })
+        except Exception as e:
+            logging.error(f"❌ 네이버 API 수집 에러 ({keyword}): {e}")
+            
+    return articles
+
 def filter_date(articles):
     now = datetime.utcnow()
+    # Naver API 출처는 SOURCE_DAY_RULE에 없으므로 기본값 7일이 적용됩니다. (필요시 조정 가능)
     result = [a for a in articles if a["published"] and (now - datetime(*a["published"][:6])) <= timedelta(days=SOURCE_DAY_RULE.get(a["source"], 7))]
     return result
 
@@ -149,7 +226,6 @@ def ai_filter(articles):
         # 1. 괄호 안의 단어 제거 (예: [속보], (종합))
         clean_title = re.sub(r'\[.*?\]|\(.*?\)', '', clean_title)
         # 2. 맨 뒤에 붙은 하이픈(-), 파이프(|), 꺾쇠(>) 뒤의 언론사명 제거
-        # 뒤에서부터 찾아서 지우기 때문에 제목 본문의 하이픈은 비교적 안전합니다.
         clean_title = re.sub(r'\s*[-|>|ⓒ]\s*[^-|>|ⓒ]*$', '', clean_title).strip()
         
         compact_articles.append({"title": clean_title, "url": a["url"]})
@@ -248,8 +324,10 @@ def process_news():
     send_teams_log(f"🔄 뉴스 수집 프로세스 시작 ({start_time})")
 
     try:
-        # 1. 수집
-        articles = fetch_rss()
+        # 1. 수집 (RSS + 네이버 API 병합)
+        rss_articles = fetch_rss()
+        naver_articles = fetch_naver_news()
+        articles = rss_articles + naver_articles
         
         # 2. 1차 필터링
         articles = filter_date(articles)
