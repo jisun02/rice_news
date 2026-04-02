@@ -131,7 +131,7 @@ def fetch_naver_news():
     for keyword in NAVER_KEYWORDS:
         params = {
             "query": keyword,
-            "display": 10,  # 서비스용: 키워드당 20개 추출
+            "display": 15,  # 서비스용: 키워드당 15개 추출
             "sort": "date"
         }
         
