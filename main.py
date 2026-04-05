@@ -4,7 +4,7 @@
 # 해당 언론사 홈페이지로 이동해서 트래픽을 발생시켜 주기 때문에 언론사 입장에서도 문제 삼지 않는다고 한다.
 # 따라서 직접 스크래퍼나 봇을 개발하실 때는 반드시
 # "본문은 가져오지 않고, 제목과 링크 위주로만 Teams에 쏴준다"는 원칙만 지키면
-# 회사에서 안전하게 사용하실 수 있다고 한다.
+# 회사에서 안전하게 사용할 수 있다고 한다.
 
 import feedparser
 import os
@@ -12,7 +12,7 @@ import re
 import html
 from email.utils import parsedate
 from datetime import datetime, timedelta, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, BackgroundTasks
 from openai import OpenAI
 import json
 import requests
@@ -53,7 +53,7 @@ RSS_LIST = [
 ]
 
 # 새로 추가된 네이버 API용 고도화 키워드
-NAVER_KEYWORDS = ["쌀", "벼", "쌀 수매", "쌀 수출", "쌀 생산", "쌀값", "쌀 작황", "구곡"
+NAVER_KEYWORDS = ["쌀", "벼", "쌀 수매", "쌀 수출", "쌀 생산", "쌀값", "쌀 작황", "구곡",
     "양곡관리", "미곡처리장", "TRQ", "도매 쌀값", "쌀 재고", "벼 재배",
     "농식품부 인사", "농촌진흥청 인사", "농촌경제연구원 인사", "한국농수산식품유통공사 인사",
     "농식품부 장관 인터뷰", "쌀 정책 인터뷰", "식량 정책 인터뷰", "aT 쌀"]
@@ -85,6 +85,21 @@ def send_teams_log(message):
         res.raise_for_status() 
     except Exception as e:
         logging.error(f"❌ Teams 알림 전송 실패: {e}")
+
+
+def send_news_to_pa(articles):
+    """최종 선정된 뉴스를 Power Automate(Teams 전송용)로 쏴주는 함수"""
+    news_webhook_url = os.getenv("PA_NEWS_WEBHOOK_URL")
+    if not news_webhook_url:
+        logging.error("뉴스 전송용 웹훅 URL이 없습니다.")
+        return
+
+    try:
+        # 뉴스 배열(리스트)을 그대로 Power Automate로 전송
+        requests.post(news_webhook_url, json=articles, timeout=10)
+        logging.info("✅ 최종 뉴스를 Power Automate로 성공적으로 전송했습니다.")
+    except Exception as e:
+        logging.error(f"❌ 뉴스 전송 실패: {e}")
 
 # ---------------------------
 # 수집 및 필터 함수들
@@ -313,10 +328,9 @@ Example format: [{"title": "...", "url": "..."}, {"title": "...", "url": "..."}]
     return result
 
 # ---------------------------
-# 메인 API 엔드포인트
+# 메인 작업 (뉴스 수집 및 웹훅 전송)
 # ---------------------------
-@app.get("/news")
-def process_news():
+def background_news_job():
     start_time = datetime.now(KST).strftime('%H:%M:%S')
     send_teams_log(f"🔄 뉴스 수집 프로세스 시작 ({start_time})")
 
@@ -332,21 +346,31 @@ def process_news():
         articles = filter_banned(articles)
         articles = filter_keywords(articles)
         
-        logging.info(f"1차 필터 통과: {initial_count}건")
+        logging.info(f"1차 필터 통과: {len(articles)}건")
 
         # 3. AI 필터링
         final_articles = ai_filter(articles)
         final_count = len(final_articles)
 
         # 4. 완료 보고
-        status_msg = f"✅ 뉴스 필터링 완료!\n- 수집: {len(articles)}건\n- AI 최종 선정: {final_count}건"
+        status_msg = f"✅ 뉴스 필터링 완료!\n- 최초 수집: {initial_count}건\n- AI 최종 선정: {final_count}건"
         logging.info(status_msg)
         send_teams_log(status_msg)
 
-        return final_articles
+        if final_count > 0:
+            send_news_to_pa(final_articles)
 
     except Exception as e:
-        error_msg = f"🔥 서버 내부 치명적 에러: {e}"
+        error_msg = f"🔥 백그라운드 작업 에러: {e}"
         logging.error(error_msg)
         send_teams_log(error_msg)
-        return []
+
+# ---------------------------
+# 메인 API 엔드포인트
+# ---------------------------
+@app.get("/news")
+def trigger_news(background_tasks: BackgroundTasks):
+    # 뒤에서 일할 작업(background_news_job)을 대기열에 등록
+    background_tasks.add_task(background_news_job)
+    # 0.1초 만에 바로 응답! (타임아웃 발생 절대 안 함)
+    return {"message": "주문 접수 완료. 백그라운드에서 뉴스를 수집합니다."}
