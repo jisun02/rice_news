@@ -69,6 +69,31 @@ KEYWORDS = ["쌀", "벼", "곡물", "농업", "미곡", "미", "양곡", "정부
             "농진청", "농촌진흥청", "농경연", "농촌경제연구원", "한국농어촌공사", "농어촌공사"]
 BANNED_WORDS = ["vietnam", "기부", "나눔"]
 
+SYSTEM_PROMPT = """You are an expert Rice Trade & Market Intelligence Analyst.
+Your task is to FILTER irrelevant news and REMOVE redundant duplicates, while KEEPING AS MANY diverse articles as possible.
+
+[Deduplication Rules]
+- Be inclusive: Keep multiple articles on the same topic if they offer different perspectives or angles.
+- MERGE AND REMOVE DUPLICATES IF they report the exact same specific local event or press release.
+- Pick ONLY ONE representative article and DISCARD the rest for identical core factual events.
+
+[Selection Rules - INCLUDE]
+1. TRQ (Tariff-Rate Quota): Include ALL news mentioning TRQ.
+2. Economy: Material prices, rice production costs, budget/subsidies, grain market trends.
+3. Industry: Processed rice products, new varieties, export, consumption trends.
+4. Market: Production, stockpile, rice market prices, stabilization, government policy.
+5. Personnel: Changes/interviews in MAFRA, RDA, KREI, etc.
+
+[Selection Rules - EXCLUDE]
+1. General agriculture policy not specific to rice.
+2. Farmer welfare, education, events.
+3. Government meetings without rice relevance.
+4. Non-food use of rice.
+
+Output a FLAT JSON ARRAY ONLY.
+MUST include the original 'id' exactly as provided.
+Example format: [{"id": 0, "title": "...", "url": "..."}, {"id": 1, "title": "...", "url": "..."}]"""
+
 # ---------------------------
 # Teams 알림 유틸리티
 # ---------------------------
@@ -142,7 +167,7 @@ def fetch_naver_news():
     for keyword in NAVER_KEYWORDS:
         params = {
             "query": keyword,
-            "display": 15,  # 서비스용: 키워드당 15개 추출
+            "display": 12,  # 서비스용: 키워드당 12개 추출
             "sort": "date"
         }
         
@@ -185,28 +210,9 @@ def filter_date(articles):
     result = [a for a in articles if a["published"] and (now - datetime(*a["published"][:6])) <= timedelta(days=SOURCE_DAY_RULE.get(a["source"], 7))]
     return result
 
-def filter_banned(articles):
-    before = len(articles)
-    result = []
-    removed = []
-    for a in articles:
-        if any(b in (a["title"] + " " + a["url"]).lower() for b in BANNED_WORDS):
-            removed.append(a["title"])
-        else:
-            result.append(a)
-            
-    logging.info(f"\n🚫 [BANNED WORDS FILTER]")
-    logging.info(f"입력: {before} → 출력: {len(result)}")
-    logging.info(f"제거됨 ({len(removed)}개):")
-    for r in removed:
-        logging.info(f" - {r}")
-        
-    return result
-
 def filter_keywords(articles):
     before = len(articles)
-    result = []
-    removed = []
+    result, removed = [], []
     for a in articles:
         if any(k in a["title"] for k in KEYWORDS):
             result.append(a)
@@ -215,117 +221,113 @@ def filter_keywords(articles):
             
     logging.info(f"\n🔍 [KEYWORD FILTER]")
     logging.info(f"입력: {before} → 출력: {len(result)}")
-    logging.info(f"제거됨 ({len(removed)}개):")
+
+    for r in removed:
+        logging.info(f" - {r}")
+        
+    return result
+
+def filter_banned(articles):
+    before = len(articles)
+    result, removed = [], []
+    for a in articles:
+        if any(b in (a["title"] + " " + a["url"]).lower() for b in BANNED_WORDS):
+            removed.append(a["title"])
+        else:
+            result.append(a)
+            
+    logging.info(f"\n🚫 [BANNED WORDS FILTER]")
+    logging.info(f"입력: {before} → 출력: {len(result)}")
+
     for r in removed:
         logging.info(f" - {r}")
         
     return result
 
 # ---------------------------
-# GPT 필터 (알림 강화)
+# GPT 필터
 # ---------------------------
 def ai_filter(articles):
     if not articles:
         return []
 
     before = len(articles)
+    final_result_ids = set() # GPT가 살려둔 ID들을 담을 바구니
 
-    # 정규식(re)을 사용해 맨 뒤 언론사 꼬리표와 앞의 [속보] 등을 깔끔하게 제거합니다.
-    compact_articles = []
-    for a in articles:
-        clean_title = a["title"]
-        # 1. 괄호 안의 단어 제거 (예: [속보], (종합))
-        clean_title = re.sub(r'\[.*?\]|\(.*?\)', '', clean_title)
-        # 2. 맨 뒤에 붙은 하이픈(-), 파이프(|), 꺾쇠(>) 뒤의 언론사명 제거
-        clean_title = re.sub(r'\s*[-|>|ⓒ]\s*[^-|>|ⓒ]*$', '', clean_title).strip()
-        
-        compact_articles.append({"title": clean_title, "url": a["url"]})
+    # 🌟 1. 100개씩 Chunking 분할
+    chunk_size = 100
+    chunks = [articles[i:i + chunk_size] for i in range(0, len(articles), chunk_size)]
 
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            temperature=0,
-            max_tokens=8000,
-            messages=[
-                {
-                    "role": "system", 
-                    "content": """You are an expert Rice Trade & Market Intelligence Analyst.
-Your task is to FILTER irrelevant news and REMOVE redundant duplicates, while KEEPING AS MANY diverse articles as possible.
-
-[Deduplication Rules]
-- Be inclusive: Keep multiple articles on the same topic if they offer different perspectives or angles.
-- MERGE AND REMOVE DUPLICATES IF they report the exact same specific local event or press release (e.g., "A specific city exports rice to Australia" or "A specific brand launches a new product"). 
-- Even if the headlines use slightly different words, if the core factual event is identical, pick ONLY ONE representative article and DISCARD the rest.
-
-[Selection Rules - INCLUDE]
-1. TRQ (Tariff-Rate Quota): Include ALL news mentioning TRQ, even if it's about other crops like soybeans (콩) or wheat.
-2. Agricultural material prices, rice production costs (생산비/농사 비용), farm profitability, agricultural budget/subsidies, and general grain/crop market trends.
-3. Processed rice products, new rice varieties, export/market expansion, and rice consumption trends.
-4. Production, stockpile, rice market prices (쌀값), price stabilization, and government rice policy.
-5. Rice varieties, cultivation, climate impact on rice
-6. Rice industry, distribution, exports, market expansion
-7. Personnel changes (인사이동, 발령, 취임 등), organizational updates, and interviews of key figures in rice-related government bodies and institutions (e.g., MAFRA, RDA, KREI).
-
-[Selection Rules - EXCLUDE]
-1. General agriculture policy not specific to rice
-2. Farmer welfare, education, events
-3. Government meetings or plans without rice relevance
-4. Non-food use of rice (cosmetics, beauty, etc.)
-
-Output a FLAT JSON ARRAY ONLY.
-Example format: [{"title": "...", "url": "..."}, {"title": "...", "url": "..."}]"""
-
-                },
-                {"role": "user", "content": json.dumps(compact_articles, ensure_ascii=False)}
-            ]
-        )
-        content = response.choices[0].message.content
-    except Exception as e:
-        error_msg = f"🚨 OpenAI 호출 실패: {e}"
-        logging.error(error_msg)
-        send_teams_log(error_msg)
-        return []
-
-    if content.startswith("```"):
-        content = content.split("```")[1].replace("json", "").strip()
-
-    try:
-        result = json.loads(content, strict=False)
-        
-        # 만약 GPT가 지시를 무시하고 2단 구조(카테고리/articles)로 보낼 경우를 대비한 강제 평탄화 로직
-        flattened_result = []
-        if isinstance(result, dict):
-            # {"category": [{"title": ...}]} 형태인 경우
-            for k, v in result.items():
-                if isinstance(v, list):
-                    flattened_result.extend(v)
-            result = flattened_result
-        elif isinstance(result, list) and len(result) > 0 and "articles" in result[0]:
-            # [{"category": "TRQ", "articles": [...]}] 형태인 경우
-            for item in result:
-                if "articles" in item and isinstance(item["articles"], list):
-                    flattened_result.extend(item["articles"])
-                else:
-                    flattened_result.append(item)
-            result = flattened_result
+    for chunk_idx, chunk in enumerate(chunks):
+        compact_articles = []
+        for a in chunk:
+            clean_title = a["title"]
+            clean_title = re.sub(r'\[.*?\]|\(.*?\)', '', clean_title)
+            clean_title = re.sub(r'\s*[-|>|ⓒ]\s*[^-|>|ⓒ]*$', '', clean_title).strip()
             
-    except Exception as e:
-        error_msg = f"❌ JSON 파싱 에러: {e}"
-        logging.error(error_msg)
-        send_teams_log(error_msg)
-        return []
+            # 🌟 2. GPT에게 보낼 때는 가볍게 (id, title, url만)
+            compact_articles.append({"id": a["id"], "title": clean_title, "url": a["url"]})
 
-    # 상세 로그 출력을 위한 탈락 기사 추적
-    kept_titles = set([a.get("title") for a in result if isinstance(a, dict) and "title" in a])
-    removed = [a["title"] for a in articles if a["title"] not in kept_titles]
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                temperature=0,
+                max_tokens=8000,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(compact_articles, ensure_ascii=False)}
+                ]
+            )
+            content = response.choices[0].message.content
+        except Exception as e:
+            error_msg = f"🚨 OpenAI 호출 실패 (Chunk {chunk_idx+1}): {e}"
+            logging.error(error_msg)
+            send_teams_log(error_msg)
+            continue
+
+        if content.startswith("```"):
+            content = content.split("```")[1].replace("json", "").strip()
+
+        try:
+            result = json.loads(content, strict=False)
+            
+            # 작성하신 강제 평탄화 로직
+            flattened_result = []
+            if isinstance(result, dict):
+                for k, v in result.items():
+                    if isinstance(v, list):
+                        flattened_result.extend(v)
+                result = flattened_result
+            elif isinstance(result, list) and len(result) > 0 and "articles" in result[0]:
+                for item in result:
+                    if "articles" in item and isinstance(item["articles"], list):
+                        flattened_result.extend(item["articles"])
+                    else:
+                        flattened_result.append(item)
+                result = flattened_result
+                
+            # 🌟 3. 성공한 결과에서 ID만 추출하여 세트에 추가
+            for item in result:
+                if isinstance(item, dict) and "id" in item:
+                    final_result_ids.add(item["id"])
+
+        except Exception as e:
+            error_msg = f"❌ JSON 파싱 에러 (Chunk {chunk_idx+1}): {e}"
+            logging.error(error_msg)
+            send_teams_log(error_msg)
+            continue
+
+    # 🌟 4. ID를 기준으로 원본 기사(published, source 포함) 완벽 복원
+    final_articles = [a for a in articles if a.get("id") in final_result_ids]
+    removed = [a["title"] for a in articles if a.get("id") not in final_result_ids]
 
     logging.info(f"\n🤖 [GPT FILTER]")
-    logging.info(f"입력: {before} → 출력: {len(result)}")
+    logging.info(f"입력: {before} → 출력: {len(final_articles)}")
     logging.info(f"제거됨 ({len(removed)}개):")
-    for r in removed:
+    for r in removed: # 너무 길면 [:20] 등으로 자를 수 있습니다.
         logging.info(f" - {r}")
 
-    return result
+    return final_articles
 
 # ---------------------------
 # 메인 작업 (뉴스 수집 및 웹훅 전송)
@@ -339,6 +341,11 @@ def background_news_job():
         rss_articles = fetch_rss()
         naver_articles = fetch_naver_news()
         articles = rss_articles + naver_articles
+
+        # 🌟 수집 직후 모든 기사에 고유 ID 부여 (가장 안전한 위치)
+        for idx, a in enumerate(articles):
+            a["id"] = idx
+
         initial_count = len(articles)
         
         # 2. 1차 필터링
